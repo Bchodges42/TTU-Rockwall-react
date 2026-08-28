@@ -1,0 +1,1 @@
+export function Chip({ cls, children }) { return <span className={`chip ${cls}`}><i />{children}</span> }
