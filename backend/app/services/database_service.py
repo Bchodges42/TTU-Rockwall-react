@@ -1,6 +1,6 @@
 """Database connections and transactional upgrades to Jonah Irwin's schema."""
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
@@ -130,7 +130,60 @@ def _import(db, old):
             _issue(db, "visitorsInQueue", r, "Duplicate queue entry or missing visitor")
 
 
+def _run_script(db, filename):
+    statement = ""
+    for line in (BACKEND / "app/schema/migrations" / filename).read_text(encoding="utf-8").splitlines():
+        statement += line + "\n"
+        if sqlite3.complete_statement(statement):
+            db.execute(statement)
+            statement = ""
+
+
+def _backfill_departures(db):
+    for row in db.execute("SELECT UniqueID,Arrival_Time FROM visitorsSignedUp WHERE Departure_Time IS NULL").fetchall():
+        departure = datetime.fromisoformat(row["Arrival_Time"]) + timedelta(hours=1)
+        db.execute("UPDATE visitorsSignedUp SET Departure_Time=? WHERE UniqueID=?", (departure.isoformat(), row["UniqueID"]))
+
+
+# Applied in order after the 002_jonah rebuild; each runs once in its own transaction.
+INCREMENTAL = (("003_booking", _backfill_departures),)
+
+
 def initialize_database():
+    result = _upgrade_to_jonah()
+    applied = _apply_incremental()
+    if applied:
+        result = {**result, "upgraded": True, "applied": applied}
+    return result
+
+
+def _apply_incremental():
+    db = get_connection()
+    applied = []
+    try:
+        for name, hook in INCREMENTAL:
+            if db.execute("SELECT 1 FROM schema_migrations WHERE name=?", (name,)).fetchone():
+                continue
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM schema_migrations WHERE name=?", (name,)).fetchone():
+                db.rollback()
+                continue
+            if db.execute("SELECT 1 FROM visitorsSignedUp LIMIT 1").fetchone():
+                backup_database()
+            _run_script(db, f"{name}.sql")
+            hook(db)
+            db.execute("INSERT INTO schema_migrations VALUES (?,?)", (name, now_utc()))
+            db.commit()
+            applied.append(name)
+        return applied
+    except BaseException:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _upgrade_to_jonah():
     db = get_connection()
     try:
         tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -151,12 +204,7 @@ def initialize_database():
         for t in reversed(CORE):
             if t in tables:
                 db.execute(f'DROP TABLE "{t}"')
-        statement = ""
-        for line in (BACKEND / "app/schema/migrations/002_jonah.sql").read_text(encoding="utf-8").splitlines():
-            statement += line + "\n"
-            if sqlite3.complete_statement(statement):
-                db.execute(statement)
-                statement = ""
+        _run_script(db, "002_jonah.sql")
         _import(db, old)
         legacy = db.execute("SELECT v FROM settings WHERE k='capacity'").fetchone()
         if legacy:
@@ -198,5 +246,7 @@ def get_capacity(db=None):
 
 def appointment_view(row):
     local = datetime.fromisoformat(row["Arrival_Time"]).astimezone(wall_zone())
-    return {"id": row["ReceiptCode"], "name": f"{row['FirstName']} {row['LastName']}".strip(),
-            "date": local.date().isoformat(), "time": local.strftime("%H:%M"), "status": row["Status"]}
+    leave = datetime.fromisoformat(row["Departure_Time"]).astimezone(wall_zone())
+    return {"id": row["ReceiptCode"], "code": row["PickupCode"], "name": f"{row['FirstName']} {row['LastName']}".strip(),
+            "date": local.date().isoformat(), "time": local.strftime("%H:%M"),
+            "departure": leave.strftime("%H:%M"), "status": row["Status"]}

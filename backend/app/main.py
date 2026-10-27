@@ -10,8 +10,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.app.api.routes import appointments, auth, capacity, events, queue, site_content
+from backend.app.api.routes import appointments, auth, capacity, events, hours, queue, site_content
 from backend.app.services.database_service import db_session, initialize_database
+from backend.app.services.email_service import deliver_pending
+from backend.app.services.hours_sync import sync_if_due
 from backend.app.services.visits import cleanup_database
 
 logger = logging.getLogger("rockwall")
@@ -23,10 +25,11 @@ ORIGINS = [s.strip() for s in os.environ.get(
 async def housekeeping():
     while True:
         await asyncio.sleep(60)
-        try:
-            await asyncio.to_thread(cleanup_database)
-        except Exception:
-            logger.exception("Rockwall database housekeeping failed")
+        for job in (cleanup_database, deliver_pending, sync_if_due):
+            try:
+                await asyncio.to_thread(job)
+            except Exception:
+                logger.exception("Rockwall housekeeping step %s failed", job.__name__)
 
 
 @asynccontextmanager
@@ -74,7 +77,7 @@ def health_check():
     return {"app": "TTU Rockwall API", "status": "ok"}
 
 
-for module in (capacity, events, auth, appointments, queue, site_content):
+for module in (capacity, events, auth, appointments, hours, queue, site_content):
     app.include_router(module.router, prefix="/api")
     # Compatibility with the original direct-to-backend endpoint paths.
     app.include_router(module.router, include_in_schema=False)
@@ -85,6 +88,12 @@ def homepage():
     if (DIST / "index.html").is_file():
         return FileResponse(DIST / "index.html")
     return {"app": "TTU Rockwall API", "status": "ok", "frontend": "Run npm run build in frontend."}
+
+
+@app.get("/booking")
+def manage_page():
+    """The emailed manage-booking link lands here; React reads the token from the URL."""
+    return homepage()
 
 
 if (DIST / "assets").is_dir():

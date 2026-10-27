@@ -50,15 +50,50 @@ class Register(BaseModel):
 class Login(BaseModel):
     email: str = Field(min_length=1, max_length=254)
     password: str = Field(min_length=1, max_length=128)
+EMAIL_RE = re.compile(r"[^\s@,;<>\"]+@[^\s@,;<>\"]+\.[^\s@,;<>\"]+")
+CLOCK = r"^\d{2}:\d{2}$"
 class Appointment(BaseModel):
     name: str = Field(min_length=1, max_length=200)
+    email: Optional[str] = Field(default=None, max_length=254)
     date: str
-    time: str
+    time: str = Field(pattern=CLOCK)  # arrival, local wall time
+    departure: Optional[str] = Field(default=None, pattern=CLOCK)  # defaults to one hour after arrival
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value):
+        value = (value or "").strip().lower() or None
+        if value and not EMAIL_RE.fullmatch(value):
+            raise ValueError("Enter a valid email address")
+        return value
 class AppointmentPatch(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     date: Optional[str] = None
-    time: Optional[str] = None
+    time: Optional[str] = Field(default=None, pattern=CLOCK)
+    departure: Optional[str] = Field(default=None, pattern=CLOCK)
     status: Optional[Literal["pending","confirmed","cancelled","completed","no-show"]] = None
+class CancelByToken(BaseModel):
+    token: str = Field(min_length=20, max_length=200)
+class CheckIn(BaseModel):
+    code: str = Field(min_length=1, max_length=300)  # typed, or the full text a QR scanner sends
+class DayHours(BaseModel):
+    weekday: int = Field(ge=0, le=6)
+    opens: Optional[str] = Field(default=None, pattern=CLOCK)
+    closes: Optional[str] = Field(default=None, pattern=CLOCK)
+
+    @model_validator(mode="after")
+    def consistent(self):
+        if (self.opens is None) != (self.closes is None):
+            raise ValueError("Give both opening and closing times, or neither for a closed day")
+        if self.opens and (self.opens >= self.closes or self.opens[3:] not in ("00", "30") or self.closes[3:] not in ("00", "30")):
+            raise ValueError("Hours must be on the half hour and close after they open")
+        return self
+class HoursUpdate(BaseModel):
+    weekly: Optional[list[DayHours]] = Field(default=None, min_length=7, max_length=7)
+    auto_sync: Optional[bool] = None
+class ClosureIn(BaseModel):
+    day: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
+    reason: str = Field(default="Closed", max_length=120)
 class FeedbackIn(BaseModel):
     route: str; rating: int; comment: str; author: Optional[str] = None
 
@@ -72,6 +107,7 @@ class FaqIn(BaseModel):
     q: str; a: str
 class CapacityIn(BaseModel):
     max: int = Field(ge=1, le=200)
+    online: Optional[int] = Field(default=None, ge=0, le=200)
 class EventIn(BaseModel):
     name: str; spots_total: int = 20; spots_filled: int = 0; next_date: str = ""; link: str = ""
 class EventPatch(BaseModel):

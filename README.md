@@ -100,6 +100,52 @@ Health check: `GET /api/health`. Database integrity:
 prototype staff without accounts become disabled placeholders, and invalid
 queue entries are retained as diagnostic records instead of being silently lost.
 
+## Booking, hours, email and check-in
+
+**Hours pipeline.** Weekly climbing-wall hours live in `operating_hours` and sync
+from the "Climbing Wall Hours" column of https://www.tntech.edu/recreation/hours.php
+every 6 hours (and on demand from Admin → Hours → *Sync from TTU now*). Closed days
+never appear in the booking window, the homepage open/closed line and booking
+validation read the same data, so if TTU changes the days the wall is open the site
+follows on the next sync. If the page can't be read, the last good hours stay in
+place and Admin → Hours shows why. Admins can add one-off closures (holidays,
+resets) or edit the week by hand. A manual edit turns auto-sync off so it isn't
+overwritten. Set `ROCKWALL_HOURS_SYNC=0` to disable network syncing.
+
+**Bookings.** Visitors choose a day, an arrival and a departure on a half-hour
+grid inside the posted hours. Online bookings are capped per half hour at the
+*Bookable online* setting (default 10, never above the wall's maximum) so walk-ins
+keep room. Each booking gets a 4-character check-in code (no vowels or look-alike
+characters, unique among active bookings).
+
+**Email.** Confirmation emails carry the code, a QR code, Google Calendar and
+`.ics` calendar links, and a *Manage or cancel* link. Cancelling sends a second
+email. Messages are queued in `email_outbox` in the same transaction as the
+booking and sent in the background with retries, so a mail outage never blocks
+or loses a booking. Configure:
+
+```powershell
+$env:ROCKWALL_PUBLIC_URL = 'https://tntechclimb.com'      # used in email links
+$env:ROCKWALL_SMTP_HOST = 'smtp.office365.com'           # or your relay
+$env:ROCKWALL_SMTP_PORT = '587'
+$env:ROCKWALL_SMTP_SECURITY = 'starttls'                 # starttls | ssl | none
+$env:ROCKWALL_SMTP_USER = 'rockwall@tntech.edu'
+$env:ROCKWALL_SMTP_PASSWORD = '…'                        # keep out of Git
+$env:ROCKWALL_SMTP_FROM = 'TTU Rockwall <rockwall@tntech.edu>'
+```
+
+Without `ROCKWALL_SMTP_HOST`, emails are written as `.eml` files to `outbox/`
+next to the database. Open one in Outlook or Mail to preview it.
+
+**Cancelling.** From the email link (`/booking?token=…`, which shows the booking
+and needs a second click to cancel, so link-scanning mail filters can't cancel
+anything), from *My bookings* when signed in, or by staff in Admin → Reservations.
+
+**Desk check-in.** Staff → *Check in*: type the code or scan the QR. Any USB
+"2D barcode scanner" (about $25–45) works with no setup because it acts as a
+keyboard: it types the code and presses Enter. On Chrome/Edge for Android or
+desktop with a camera, *Scan with camera* uses the built-in barcode detector.
+
 ## Verification
 
 ```powershell
@@ -111,3 +157,6 @@ npm --prefix frontend run build
 The integration tests cover fresh startup, both legacy layouts, failed-upgrade
 rollback, data preservation, password/session handling, moderator permissions,
 receipt flows, capacity races, cleanup, and online backup restoration.
+`test_booking_features.py` covers the hours sync and parser, closed-day handling,
+the booking grid and online limits, check-in codes, desk check-in, emails and
+both cancellation paths, and the 003 upgrade on an existing database.

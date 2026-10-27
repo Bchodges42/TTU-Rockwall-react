@@ -23,6 +23,7 @@ def current_user(request: Request):
     if row is None:
         return None
     return {"id": row["UniqueID"], "email": row["UserEmail"], "username": row["Username"],
+            "name": f"{row['FirstName']} {row['LastName']}".strip(),
             "role": "admin" if row["super_moderator"] else "moderator" if row["moderator"] else "student"}
 
 

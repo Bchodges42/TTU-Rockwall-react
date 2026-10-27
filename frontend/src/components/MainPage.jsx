@@ -1,13 +1,14 @@
 import { useState } from 'react'
-import { Chip } from './Chip.jsx'
-import { eqClass, eventStatus } from '../services/eventService.js'
+import BookingCard from './BookingCard.jsx'
 import { feedbackService } from '../services/rockwallService.js'
+import { fmtTime } from '../services/format.js'
 
 const EVENT_LINK = 'https://recreation.tntech.edu/program?classificationId=41963321-bd55-41c8-af8e-cd07559ba06b'
 const EMPTY_FB = { route: '', rating: 5, comment: '', author: '' }
 
-// MainPage = Home + More content (the public site)
-export default function MainPage({ page, data, isAdmin, setPage, onBook, onDataChanged }) {
+// MainPage = Home + "Gear & FAQ" (the public site). Status is shown once, in the hero;
+// sections here carry plain titles and only flag things a climber needs to act on.
+export default function MainPage({ page, data, user, onFind, onDataChanged }) {
   const [faqOpen, setFaqOpen] = useState(null)
   const [fbForm, setFbForm] = useState(EMPTY_FB)
   const [fbMsg, setFbMsg] = useState(null)
@@ -17,70 +18,65 @@ export default function MainPage({ page, data, isAdmin, setPage, onBook, onDataC
   async function sendFeedback(e) {
     e.preventDefault()
     if (!fbForm.route || !fbForm.comment) return setFbMsg({ type:'err', text:'Pick a route and leave a comment.' })
-    try { await feedbackService.create(fbForm); setFbForm(EMPTY_FB); setFbMsg(null); onDataChanged() }
+    try { await feedbackService.create(fbForm); setFbForm(EMPTY_FB); setFbMsg({ type: 'ok', text: 'Thanks for the feedback!' }); onDataChanged() }
     catch (error) { setFbMsg({ type:'err', text:error.message }) }
   }
   const setF = key => e => setFbForm(f => ({ ...f, [key]: key === 'rating' ? Number(e.target.value) : e.target.value }))
 
   if (page === 'home') {
     const { capacity, events, leaderboard, peak } = data
-    const peakMax = peak.length ? Math.max(...peak.map(p => p.count)) : 1
     return (
       <>
+        <BookingCard hours={data.hours} user={user} onBooked={onDataChanged} onFind={onFind} />
+
         <div className="tile-grid">
-          <section className="tile rise">
-            <div className="tile-head"><h2>Priority access</h2>{isAdmin ? <Chip cls="c-accent">Admin</Chip> : <StatusChip capacity={capacity} />}</div>
-            <div className="tile-body">
-              <CapacityBody capacity={capacity} />
-              <p className="tile-note">Reserve a slot when it's busy — hop the queue with a booked time.</p>
-            </div>
-            <div className="tile-foot row">
-              <button className="btn btn-warm grow" onClick={() => onBook('schedule')}>Book a slot</button>
-              {isAdmin && <button className="btn" onClick={() => setPage('admin')}>Open admin</button>}
-            </div>
+          <section className="tile">
+            <div className="tile-head"><h2>At the wall now</h2></div>
+            <div className="tile-body"><CapacityBody capacity={capacity} /></div>
           </section>
 
-          <section className="tile rise">
-            <div className="tile-head"><h2>Classes & events</h2><Chip cls="c-info">{events.length} today</Chip></div>
+          <section className="tile">
+            <div className="tile-head"><h2>Classes &amp; events</h2></div>
             <div className="tile-body">
               <ul className="events">
                 {events.length === 0 && <li className="event-meta">No classes scheduled.</li>}
-                {events.map((ev, i) => (
-                  <EventRow key={ev.id ?? i} ev={ev} st={eventStatus(ev)} showOpen />
-                ))}
+                {events.map((ev, i) => <EventRow key={ev.id ?? i} ev={ev} />)}
               </ul>
+              <a className="tile-link" href={EVENT_LINK} target="_blank" rel="noreferrer">Campus class registration ↗</a>
             </div>
-            <div className="tile-foot"><button className="btn btn-block" onClick={() => onBook('availability')}>Check availability</button></div>
           </section>
         </div>
 
-        <Leaderboard leaderboard={leaderboard} />
-        <PeakTimes peak={peak} peakMax={peakMax} />
+        {leaderboard.length > 0 && <Leaderboard leaderboard={leaderboard} />}
+        {peak.some(p => p.count > 0) && <PeakTimes peak={peak} hours={data.hours} />}
       </>
     )
   }
 
-  // more
+  // Gear & FAQ
+  const flagged = data.equipment.filter(eq => !/available|free/i.test(eq.status || ''))
   return (
     <>
-      <div className="page-intro"><h2>More from the wall</h2><p>Gear on hand, what climbers are saying, and quick answers.</p></div>
+      <div className="page-intro"><h2>Gear &amp; FAQ</h2><p>What's on hand, what climbers are saying, and quick answers.</p></div>
 
-      <section className="tile rise">
-        <div className="tile-head"><h2>Equipment</h2><Chip cls="c-info">{data.equipment.length} items</Chip></div>
+      <section className="tile mt14">
+        <div className="tile-head"><h2>Equipment</h2></div>
         <div className="tile-body">
+          {data.equipment.length > 0 && flagged.length === 0 && <p className="tile-lede">Everything below is free to use. Ask the desk for your size.</p>}
           <ul className="events">
+            {data.equipment.length === 0 && <li className="event-meta">Shoes, harnesses and chalk are available at the desk.</li>}
             {data.equipment.map(eq => (
               <li className="event-row" key={eq.id}>
-                <div className="event-main"><span className="fw600">{eq.name}</span><div className="event-meta">{eq.note || '—'}</div></div>
-                <Chip cls={eqClass(eq.status)}>{eq.status}</Chip>
+                <div className="event-main"><span className="fw600">{eq.name}</span>{eq.note && <div className="event-meta">{eq.note}</div>}</div>
+                {flagged.includes(eq) && <span className={`flag ${/limited/i.test(eq.status) ? 'warn' : 'err'}`}>{eq.status}</span>}
               </li>
             ))}
           </ul>
         </div>
       </section>
 
-      <section className="tile rise mt">
-        <div className="tile-head"><h2>Route feedback</h2><Chip cls="c-info">{data.feedback.length} notes</Chip></div>
+      <section className="tile mt">
+        <div className="tile-head"><h2>Route feedback</h2></div>
         <div className="tile-body">
           <form className="stack fb-form" onSubmit={sendFeedback}>
             <div className="row2">
@@ -92,66 +88,58 @@ export default function MainPage({ page, data, isAdmin, setPage, onBook, onDataC
             {fbMsg && <p className={`note ${fbMsg.type} plain`}>{fbMsg.text}</p>}
             <button className="btn btn-primary self-start">Post feedback</button>
           </form>
-          <ul className="events">
-            {data.feedback.length === 0 && <li className="event-meta">No feedback yet — be the first.</li>}
-            {data.feedback.map(fb => (
-              <li className="event-row" key={fb.id}>
-                <div className="event-main">
-                  <span className="fw600">{fb.route}</span>{' '}
-                  <span className="event-meta inline">· {'★'.repeat(fb.rating)}{'☆'.repeat(5-fb.rating)} · {fb.author}</span>
-                  <div className="event-meta fb-comment">{fb.comment}</div>
-                </div>
-                <Chip cls="c-info">{fb.rating}/5</Chip>
-              </li>
-            ))}
-          </ul>
+          {data.feedback.length > 0 && (
+            <ul className="events">
+              {data.feedback.map(fb => (
+                <li className="event-row" key={fb.id}>
+                  <div className="event-main">
+                    <span className="fw600">{fb.route}</span>{' '}
+                    <span className="event-meta inline">· <span aria-label={`${fb.rating} of 5 stars`}>{'★'.repeat(fb.rating)}{'☆'.repeat(5-fb.rating)}</span> · {fb.author}</span>
+                    <div className="event-meta fb-comment">{fb.comment}</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
       </section>
 
-      <section className="tile rise mt">
-        <div className="tile-head"><h2>FAQ</h2><Chip cls="c-accent">{data.faqs.length} answers</Chip></div>
-        <div className="tile-body">
-          <div className="stack">
-            {data.faqs.map(f => (
-              <div key={f.id} className="faq-row">
-                <button className={`faq-q ${faqOpen===f.id?'on':''}`} onClick={() => setFaqOpen(o => o===f.id?null:f.id)} aria-expanded={faqOpen===f.id}>
-                  <span>{f.q}</span><span className="faq-plus">{faqOpen===f.id?'–':'+'}</span>
-                </button>
-                {faqOpen===f.id && <p className="faq-a">{f.a}</p>}
-              </div>
-            ))}
+      {data.faqs.length > 0 && (
+        <section className="tile mt">
+          <div className="tile-head"><h2>FAQ</h2></div>
+          <div className="tile-body">
+            <div className="faq-list">
+              {data.faqs.map(f => (
+                <div key={f.id} className="faq-row">
+                  <button className={`faq-q ${faqOpen===f.id?'on':''}`} onClick={() => setFaqOpen(o => o===f.id?null:f.id)} aria-expanded={faqOpen===f.id}>
+                    <span>{f.q}</span><span className="faq-plus" aria-hidden="true">{faqOpen===f.id?'–':'+'}</span>
+                  </button>
+                  {faqOpen===f.id && <p className="faq-a">{f.a}</p>}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
     </>
   )
 }
 
 function pctOf(capacity) {
-  return capacity.max ? Math.round((capacity.active / capacity.max) * 100) : 0
+  return capacity.max ? Math.min(100, Math.round((capacity.active / capacity.max) * 100)) : 0
 }
 
-function EventRow({ ev, st }) {
-  if (!st) return null
+function EventRow({ ev }) {
+  const left = ev.spots_total - ev.spots_filled
   return (
     <li className="event-row">
       <div className="event-main">
         <a href={ev.link || EVENT_LINK} target="_blank" rel="noreferrer">{ev.name}</a>
-        <div className="event-meta">{ev.spots_total - ev.spots_filled} of {ev.spots_total} open</div>
+        {ev.next_date && <div className="event-meta">{ev.next_date}</div>}
       </div>
-      <Chip cls={st.cls}>{st.txt}</Chip>
+      {left > 0 ? <span className="event-meta">{left} of {ev.spots_total} spots left</span> : <span className="flag err">Full</span>}
     </li>
   )
-}
-
-function StatusChip({ capacity }) {
-  const chip = statusOf(capacity)
-  return <Chip cls={chip.cls}>{chip.label}</Chip>
-}
-
-function statusOf(capacity) {
-  const pct = pctOf(capacity)
-  return capacity.active >= capacity.max ? { cls:'c-err', label:'Full' } : pct >= 70 ? { cls:'c-warn', label:'Busy' } : { cls:'c-ok', label:'Open' }
 }
 
 function CapacityBody({ capacity }) {
@@ -159,24 +147,24 @@ function CapacityBody({ capacity }) {
   const capCls = capacity.active >= capacity.max ? 'full' : pct >= 70 ? 'tight' : ''
   return (
     <>
-      <div className="cap-big"><span className="n">{capacity.active}</span><span className="of">of <b>{capacity.max}</b> in the wall</span></div>
-      <div className={`cap-track ${capCls}`} role="progressbar" aria-valuenow={capacity.active} aria-valuemin={0} aria-valuemax={capacity.max} aria-label="Capacity"><span style={{ width: `${pct}%` }} /></div>
-      <div className="cap-foot"><span>{pct}%</span><span>max {capacity.max}</span></div>
+      <div className="cap-big"><span className="n">{capacity.active}</span><span className="of">of <b>{capacity.max}</b> climbing</span></div>
+      <div className={`cap-track ${capCls}`} role="progressbar" aria-valuenow={capacity.active} aria-valuemin={0} aria-valuemax={capacity.max} aria-label="Climbers at the wall"><span style={{ width: `${pct}%` }} /></div>
+      <p className="tile-note">Walk-ins are welcome while there's room. Booking holds you an online space.</p>
     </>
   )
 }
 
 function Leaderboard({ leaderboard }) {
   return (
-    <section className="tile rise mt">
-      <div className="tile-head"><h2>Leaderboard</h2><Chip cls="c-gold">Top sends</Chip></div>
+    <section className="tile mt">
+      <div className="tile-head"><h2>Leaderboard</h2></div>
       <div className="tile-body">
         <ol className="board">
           {leaderboard.map((r, i) => (
             <li key={r.id} className="board-row">
-              <span className="board-rank">#{i + 1}</span>
+              <span className="board-rank">{i + 1}</span>
               <span className="board-name">{r.name}</span>
-              <Chip cls={i === 0 ? 'c-gold' : i === 1 ? 'c-info' : 'c-ok'}>{r.score} pts</Chip>
+              <span className="board-score">{r.score}</span>
             </li>
           ))}
         </ol>
@@ -185,17 +173,22 @@ function Leaderboard({ leaderboard }) {
   )
 }
 
-function PeakTimes({ peak, peakMax }) {
+function PeakTimes({ peak, hours }) {
+  const today = hours?.today
+  const shown = today?.open ? peak.filter(p => p.hour >= Number(today.opens.slice(0, 2)) && p.hour < Number(today.closes.slice(0, 2))) : peak
+  const rows = shown.length ? shown : peak
+  const max = Math.max(1, ...rows.map(p => p.count))
+  const nowHour = new Date().getHours()
   return (
-    <section className="tile rise mt">
-      <div className="tile-head"><h2>Peak-time analytics</h2><Chip cls="c-accent">3 — 8 PM</Chip></div>
+    <section className="tile mt">
+      <div className="tile-head"><h2>Busiest hours</h2></div>
       <div className="tile-body">
-        <div className="peak-bars" aria-label="Peak visits by hour">
-          {peak.map(p => (
-            <div className="peak-col" key={p.hour}>
-              <div className="peak-track"><span style={{ height: `${Math.round((p.count / peakMax) * 100)}%` }} /></div>
-              <span className="peak-label">{p.hour}:00</span>
+        <div className="peak-bars" aria-label="Check-ins by hour">
+          {rows.map(p => (
+            <div className={`peak-col ${p.hour === nowHour ? 'now' : ''}`} key={p.hour}>
               <span className="peak-count">{p.count}</span>
+              <div className="peak-track"><span style={{ height: `${Math.round((p.count / max) * 100)}%` }} /></div>
+              <span className="peak-label">{fmtTime(`${String(p.hour).padStart(2, '0')}:00`)}</span>
             </div>
           ))}
         </div>

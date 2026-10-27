@@ -5,9 +5,7 @@ from pathlib import Path
 import sqlite3
 
 import pytest
-from fastapi.testclient import TestClient
-
-from backend.app.main import app
+from support import PASSWORD, booking, login, register
 from backend.app.services.database_service import (
     CORE, backup_database, database_path, db_session, get_connection, initialize_database,
 )
@@ -16,49 +14,12 @@ from backend.app.services.time_service import now_utc, wall_zone
 from backend.app.services.visits import cleanup_database
 from backend.manage import set_role
 
-PASSWORD = "test-only-password"
 BACKEND = Path(__file__).resolve().parents[1]
-
-
-@pytest.fixture(autouse=True)
-def isolated_database(tmp_path, monkeypatch):
-    monkeypatch.setenv("ROCKWALL_DB_PATH", str(tmp_path / "rockwall.db"))
-    monkeypatch.setenv("ROCKWALL_TIMEZONE", "America/Chicago")
-    monkeypatch.setenv("ROCKWALL_COOKIE_SECURE", "0")
-
-
-@pytest.fixture
-def client():
-    with TestClient(app) as client:
-        yield client
-
-
-def register(client, email="student@example.test"):
-    return client.post("/api/register", json={
-        "firstname": "Test", "lastname": "Climber", "phone": "+1 555 0100",
-        "email": email, "password": PASSWORD,
-    })
-
-
-def login(client, email="student@example.test", role=None):
-    assert register(client, email).status_code == 201
-    if role:
-        with db_session(write=True) as db:
-            account_id = db.execute("SELECT UniqueID FROM tableSignInInfo WHERE UserEmail=?", (email,)).fetchone()[0]
-            set_role(db, account_id, role)
-    result = client.post("/api/login", json={"email": email, "password": PASSWORD})
-    assert result.status_code == 200
-    return result
-
-
-def booking(client, days=1):
-    day = (datetime.now(wall_zone()) + timedelta(days=days)).date().isoformat()
-    return client.post("/api/appointments", json={"name": "Test Climber", "date": day, "time": "15:00"})
 
 
 def test_fresh_schema_and_idempotency(client):
     assert client.get("/api/health").json()["status"] == "ok"
-    assert client.get("/api/capacity").json() == {"active": 0, "max": 20}
+    assert client.get("/api/capacity").json() == {"active": 0, "max": 20, "online": 10}
     assert initialize_database() == {"upgraded": False}
     with db_session() as db:
         names = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -133,7 +94,7 @@ def test_atomic_capacity_and_checkout(client):
     with ThreadPoolExecutor(max_workers=2) as pool:
         statuses = list(pool.map(admit, ids))
     assert sorted(statuses) == [200, 409]
-    assert client.get("/api/capacity").json() == {"active": 1, "max": 1}
+    assert client.get("/api/capacity").json() == {"active": 1, "max": 1, "online": 1}
     admitted = next(r for r in client.get("/api/queue").json() if r["status"] == "admitted")
     assert client.patch(f"/api/queue/{admitted['id']}", json={"action": "cancel"}).status_code == 409
     assert client.patch(f"/api/queue/{admitted['id']}", json={"action": "checkout"}).status_code == 200

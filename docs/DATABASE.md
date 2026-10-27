@@ -22,9 +22,9 @@ Occupancy is the count of admitted queue entries; the maximum is a setting.
 A reservation is confirmed or pending until changed/cancelled, checked out
 (completed), or marked no-show after its day has passed. Due confirmed reservations
 join the queue automatically; staff can add same-day receipts earlier.
-Reservations are limited by the configured maximum at the same appointment start
-time. The existing app has no authored slot duration or opening-hours schedule;
-interval-overlap scheduling is not inferred from the homepage's hours text.
+Reservations have an arrival and a departure (`Departure_Time`, added in 003).
+Online bookings are limited per half-hour slot by the `online_capacity` setting
+(capped at `capacity_max`), counting every booking that overlaps the slot.
 
 ## Additional website tables
 
@@ -41,7 +41,21 @@ A moderator may manage the queue; only a super-moderator (API role `admin`) may
 read all reservations or edit website content/settings. Ordinary receipt lookup
 masks names unless performed by the account owner or a super-moderator.
 
-`schema_migrations` records the applied upgrade.
+## 003_booking
+
+Adds columns to `visitorsSignedUp` (Jonah's columns are unchanged):
+`Departure_Time` (backfilled to arrival + 1 hour), `PickupCode` (4-character
+desk code, unique among pending/confirmed bookings), `Email`, and
+`CancelTokenHash` (SHA-256 of the emailed manage link; the link itself is not
+stored, and queued email bodies are cleared after sending).
+
+New tables: `operating_hours` (weekly hours, NULL = closed, synced from TTU's hours
+page), `closures` (one-off closed days), and `email_outbox` (queued email with
+retry state). New settings: `online_capacity`, `booking_days`, `hours_auto_sync`,
+`hours_synced_at`, `hours_sync_status`. The upgrade takes a backup first when
+bookings exist, runs in one transaction, and is recorded in `schema_migrations`.
+
+`schema_migrations` records the applied upgrades.
 `migration_issues` retains records that could not become valid active records,
 excluding plaintext password fields. It is available to local administration,
 not through a public endpoint.
