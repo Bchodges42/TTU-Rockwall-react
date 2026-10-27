@@ -1,21 +1,22 @@
-from fastapi import APIRouter, Header, HTTPException
-from typing import Optional
-from app.services.database_service import get_capacity, set_capacity
-from app.services.auth_service import require_admin
-from app.models.request_models import CapacityIn
+from fastapi import APIRouter, Depends, HTTPException
+from backend.app.models.request_models import CapacityIn
+from backend.app.services.auth_service import require_admin
+from backend.app.services.database_service import db_session, get_capacity
 
 router = APIRouter(tags=["capacity"])
 
+
 @router.get("/capacity")
 def capacity():
-    active, maxv = get_capacity()
-    return {"active": active, "max": maxv}
+    active, maximum = get_capacity()
+    return {"active": active, "max": maximum}
+
 
 @router.put("/admin/capacity")
-def admin_capacity(body: CapacityIn, x_admin: Optional[str] = Header(None)):
-    require_admin(x_admin)
-    if body.max < 1 or body.max > 200: raise HTTPException(400, "max must be 1–200")
-    act, _ = get_capacity()
-    if act > body.max: act = body.max
-    set_capacity(act, body.max)
-    return {"active": act, "max": body.max}
+def admin_capacity(body: CapacityIn, user=Depends(require_admin)):
+    with db_session(write=True) as db:
+        active, _ = get_capacity(db)
+        if body.max < active:
+            raise HTTPException(409, "Check out climbers before lowering capacity below current occupancy.")
+        db.execute("UPDATE settings SET v=? WHERE k='capacity_max'", (str(body.max),))
+    return {"active": active, "max": body.max}

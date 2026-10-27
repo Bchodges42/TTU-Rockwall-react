@@ -10,6 +10,8 @@ frontend/.vite/
 
 # Local databases and runtime files
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 *.log
@@ -19,3 +21,4 @@ frontend/.vite/
 .env.*
 !.env.example
 .DS_Store
+.pytest_cache/

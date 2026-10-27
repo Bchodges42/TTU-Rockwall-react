@@ -1,7 +1,7 @@
 import re
-from typing import Optional
+from typing import Optional, Literal
 from fastapi import HTTPException
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 # ponytail: static denylist, not an ML filter — sized for the bored-student-worker
 # threat; determined actors can leetspeak past any static list. Escalate to a
@@ -33,13 +33,32 @@ def ensure_no_profanity(text: str):
         raise HTTPException(400, f"Inappropriate language isn't allowed (matched \"{m.group(0)}\").")
 
 class Register(BaseModel):
-    firstname: str; lastname: str; phone: str; email: str; password: str
+    model_config = ConfigDict(extra="forbid")
+    firstname: str = Field(min_length=1, max_length=100)
+    lastname: str = Field(min_length=1, max_length=100)
+    phone: str = Field(default="", max_length=50)
+    email: str = Field(max_length=254)
+    password: str = Field(min_length=8, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value):
+        value = value.strip().lower()
+        if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", value):
+            raise ValueError("Enter a valid email address")
+        return value
 class Login(BaseModel):
-    email: str; password: str
+    email: str = Field(min_length=1, max_length=254)
+    password: str = Field(min_length=1, max_length=128)
 class Appointment(BaseModel):
-    name: str; date: str; time: str
+    name: str = Field(min_length=1, max_length=200)
+    date: str
+    time: str
 class AppointmentPatch(BaseModel):
-    name: Optional[str] = None; date: Optional[str] = None; time: Optional[str] = None; status: Optional[str] = None
+    name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    date: Optional[str] = None
+    time: Optional[str] = None
+    status: Optional[Literal["pending","confirmed","cancelled","completed","no-show"]] = None
 class FeedbackIn(BaseModel):
     route: str; rating: int; comment: str; author: Optional[str] = None
 
@@ -52,11 +71,17 @@ class FeedbackIn(BaseModel):
 class FaqIn(BaseModel):
     q: str; a: str
 class CapacityIn(BaseModel):
-    max: int
+    max: int = Field(ge=1, le=200)
 class EventIn(BaseModel):
     name: str; spots_total: int = 20; spots_filled: int = 0; next_date: str = ""; link: str = ""
 class EventPatch(BaseModel):
     name: Optional[str] = None; spots_total: Optional[int] = None; spots_filled: Optional[int] = None; next_date: Optional[str] = None; link: Optional[str] = None
+class QueueEntry(BaseModel):
+    receipt: Optional[str] = Field(default=None, max_length=100)
+    firstname: str = Field(default="Guest", max_length=100)
+    lastname: str = Field(default="", max_length=100)
+class QueueAction(BaseModel):
+    action: Literal["admit","checkout","cancel"]
 class SiteContentIn(BaseModel):
     k: str; v: str
 

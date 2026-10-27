@@ -4,7 +4,7 @@ import { bookingService } from '../services/rockwallService.js'
 const EMPTY_APPT = { name: '', date: '', time: '' }
 
 // Book a visit: availability check, booking form + receipt, receipt verification.
-export default function BookingDialog({ tab, setTab, isAdmin, onClose, onDataChanged }) {
+export default function BookingDialog({ tab, setTab, onClose, onDataChanged }) {
   const [appt, setAppt] = useState(EMPTY_APPT)
   const [receipt, setReceipt] = useState(null)
   const [lookupId, setLookupId] = useState('')
@@ -46,7 +46,7 @@ export default function BookingDialog({ tab, setTab, isAdmin, onClose, onDataCha
     const id = (lookupId || receipt || '').trim()
     if (!id) return setMsg({ type: 'err', text: 'Enter a receipt number.' })
     run(
-      () => bookingService.verify(id, isAdmin),
+      () => bookingService.verify(id),
       data => `Verified${data.status ? ` · ${data.status}` : ''}: ${data.name} · ${data.date} ${data.time} (receipt ${data.id.slice(0,8)}…)`,
     )
   }

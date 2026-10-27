@@ -1,114 +1,124 @@
-from fastapi import APIRouter, Header, HTTPException
-from typing import Optional
+"""Keep the website's receipt API while storing bookings in visitorsSignedUp."""
+from datetime import datetime, timedelta
 import uuid
-from app.services.database_service import get_connection, get_capacity, set_capacity
-from app.services.auth_service import require_admin
-from app.models.request_models import Appointment, AppointmentPatch
-
-
-def mask_name(name: str) -> str:
-    parts = name.strip().split()
-    return " ".join(part[0] + "***" for part in parts) if parts else "***"
-
-
-def mask_if_not_admin(row: dict, x_admin: Optional[str]) -> dict:
-    if x_admin != "admin@tntech.edu":
-        row["name"] = mask_name(row["name"])
-    return row
-
-
-def adjust_capacity(delta: int) -> None:
-    act, mx = get_capacity()
-    if delta > 0 and act < mx:
-        set_capacity(act + 1, mx)
-    elif delta < 0 and act > 0:
-        set_capacity(act - 1, mx)
-
+from fastapi import APIRouter, Depends, HTTPException, Response
+from backend.app.models.request_models import Appointment, AppointmentPatch
+from backend.app.services.auth_service import current_user, require_admin
+from backend.app.services.database_service import appointment_view, db_session
+from backend.app.services.time_service import booking_time, now_utc, wall_zone
 
 router = APIRouter(tags=["appointments"])
 
 
+def scheduled(day, clock):
+    try:
+        result = booking_time(day, clock)
+    except (ValueError, TypeError):
+        raise HTTPException(422, "Enter a valid date and time at the wall.")
+    if result <= now_utc():
+        raise HTTPException(422, "Choose a future appointment time.")
+    return result
+
+
+def split_name(name):
+    names = name.strip().split(maxsplit=1)
+    if not names:
+        raise HTTPException(422, "Name is required.")
+    return names[0], names[1] if len(names) > 1 else ""
+
+
+def require_slot(db, arrival, exclude=None):
+    maximum = int(db.execute("SELECT v FROM settings WHERE k='capacity_max'").fetchone()[0])
+    count = db.execute("""SELECT count(*) FROM visitorsSignedUp
+      WHERE Arrival_Time=? AND Status IN ('pending','confirmed') AND (? IS NULL OR UniqueID<>?)""",
+      (arrival, exclude, exclude)).fetchone()[0]
+    if count >= maximum:
+        raise HTTPException(409, "This appointment time is fully booked.")
+
+
 @router.get("/availability")
 def availability(date: str):
-    return {"message": f"Time slots available for {date}!"}
+    try:
+        start = datetime.fromisoformat(booking_time(date, "00:00"))
+    except ValueError:
+        raise HTTPException(422, "Enter a valid date.")
+    next_day = (start.astimezone(wall_zone()).date() + timedelta(days=1)).isoformat()
+    end = booking_time(next_day, "00:00")
+    with db_session() as db:
+        maximum = int(db.execute("SELECT v FROM settings WHERE k='capacity_max'").fetchone()[0])
+        rows = db.execute("""SELECT Arrival_Time,count(*) AS booked FROM visitorsSignedUp
+          WHERE Arrival_Time>=? AND Arrival_Time<? AND Status IN ('pending','confirmed')
+          GROUP BY Arrival_Time""", (start.isoformat(), end)).fetchall()
+    slots = [{"time": datetime.fromisoformat(r["Arrival_Time"]).astimezone(wall_zone()).strftime("%H:%M"),
+              "remaining": max(0, maximum-r["booked"])} for r in rows]
+    return {"message": f"Reservations for {date}. Each appointment time allows up to {maximum} climbers.",
+            "max": maximum, "reserved_slots": slots}
 
 
-@router.post("/appointments")
-def book(a: Appointment):
-    rid = str(uuid.uuid4())
-    db = get_connection()
-    db.execute(
-        "INSERT INTO appointments(id, name, date, time, status) VALUES (?,?,?,?,?)",
-        (rid, a.name, a.date, a.time, "confirmed"),
-    )
-    db.commit()
-    db.close()
-    adjust_capacity(1)
-    return {"message": "Appointment booked successfully!", "receipt": rid, "appointment": {"id": rid, "name": a.name, "date": a.date, "time": a.time, "status": "confirmed"}}
-
-
-@router.get("/appointments/{appointment_id}")
-def get_appointment(appointment_id: str, x_admin: Optional[str] = Header(None)):
-    row = get_connection().execute("SELECT * FROM appointments WHERE id=?", (appointment_id,)).fetchone()
-    if not row:
-        raise HTTPException(404, "Receipt not found. Check the number and try again.")
-    return mask_if_not_admin(dict(row), x_admin)
+@router.post("/appointments", status_code=201)
+def book(body: Appointment, user=Depends(current_user)):
+    arrival, receipt = scheduled(body.date, body.time), str(uuid.uuid4())
+    first, last = split_name(body.name)
+    with db_session(write=True) as db:
+        require_slot(db, arrival)
+        db.execute("""INSERT INTO visitorsSignedUp
+          (AccountID,Username,LastName,FirstName,Arrival_Time,ReceiptCode,CreatedAt,UpdatedAt)
+          VALUES (?,?,?,?,?,?,?,?)""", (user["id"] if user else None, user["username"] if user else "Guest",
+          last, first, arrival, receipt, now_utc(), now_utc()))
+        row = db.execute("SELECT * FROM visitorsSignedUp WHERE ReceiptCode=?", (receipt,)).fetchone()
+    return {"message": "Appointment booked successfully!", "receipt": receipt, "appointment": appointment_view(row)}
 
 
 @router.get("/appointments")
-def list_appointments(x_admin: Optional[str] = Header(None)):
-    rows = [dict(r) for r in get_connection().execute("SELECT * FROM appointments ORDER BY date, time").fetchall()]
-    return [mask_if_not_admin(r, x_admin) for r in rows]
+def list_appointments(user=Depends(require_admin)):
+    with db_session() as db:
+        return [appointment_view(r) for r in db.execute("SELECT * FROM visitorsSignedUp ORDER BY Arrival_Time")]
 
 
-@router.patch("/appointments/{appointment_id}")
-def patch_appointment(appointment_id: str, patch: AppointmentPatch, x_admin: Optional[str] = Header(None)):
-    require_admin(x_admin)
-    db = get_connection()
-    row = db.execute("SELECT * FROM appointments WHERE id=?", (appointment_id,)).fetchone()
-    if not row:
-        db.close()
-        raise HTTPException(404, "Appointment not found.")
-    prev_status = row["status"] or "confirmed"
-    updates = {}
-    if patch.name is not None:
-        updates["name"] = patch.name.strip()
-    if patch.date is not None:
-        updates["date"] = patch.date
-    if patch.time is not None:
-        updates["time"] = patch.time
-    if patch.status is not None:
-        if patch.status not in ("pending", "confirmed", "cancelled"):
-            db.close()
-            raise HTTPException(400, "status must be pending/confirmed/cancelled")
-        updates["status"] = patch.status
-    if not updates:
-        db.close()
-        return dict(row)
-    new_status = updates.get("status", prev_status)
-    if prev_status != "cancelled" and new_status == "cancelled":
-        adjust_capacity(-1)
-    elif prev_status == "cancelled" and new_status != "cancelled":
-        adjust_capacity(1)
-    set_clause = ", ".join(f"{k}=?" for k in updates)
-    db.execute(f"UPDATE appointments SET {set_clause} WHERE id=?", (*updates.values(), appointment_id))
-    db.commit()
-    out = dict(db.execute("SELECT * FROM appointments WHERE id=?", (appointment_id,)).fetchone())
-    db.close()
-    return out
+@router.get("/appointments/{receipt}")
+def get_appointment(receipt: str, response: Response, user=Depends(current_user)):
+    response.headers["Cache-Control"] = "no-store"
+    with db_session() as db:
+        row = db.execute("SELECT * FROM visitorsSignedUp WHERE ReceiptCode=?", (receipt,)).fetchone()
+    if row is None:
+        raise HTTPException(404, "Receipt not found.")
+    result = appointment_view(row)
+    if not user or (user["role"] != "admin" and user["id"] != row["AccountID"]):
+        result["name"] = " ".join(part[0] + "***" for part in result["name"].split())
+    return result
 
 
-@router.delete("/appointments/{appointment_id}")
-def delete_appointment(appointment_id: str, x_admin: Optional[str] = Header(None)):
-    require_admin(x_admin)
-    db = get_connection()
-    row = db.execute("SELECT * FROM appointments WHERE id=?", (appointment_id,)).fetchone()
-    if not row:
-        db.close()
-        raise HTTPException(404, "Appointment not found.")
-    if (row["status"] or "confirmed") != "cancelled":
-        adjust_capacity(-1)
-    db.execute("DELETE FROM appointments WHERE id=?", (appointment_id,))
-    db.commit()
-    db.close()
+@router.patch("/appointments/{receipt}")
+def patch_appointment(receipt: str, body: AppointmentPatch, user=Depends(require_admin)):
+    with db_session(write=True) as db:
+        row = db.execute("SELECT * FROM visitorsSignedUp WHERE ReceiptCode=?", (receipt,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "Appointment not found.")
+        old = appointment_view(row)
+        arrival = scheduled(body.date or old["date"], body.time or old["time"]) if body.date or body.time else row["Arrival_Time"]
+        status = body.status or row["Status"]
+        active = db.execute("SELECT * FROM visitorsInQueue WHERE UniqueID_SignedUp=? AND Status IN ('waiting','admitted')",
+                            (row["UniqueID"],)).fetchone()
+        if active and active["Status"] == "admitted" and (arrival != row["Arrival_Time"] or status != row["Status"]):
+            raise HTTPException(409, "Check this visitor out before changing their booking.")
+        if status in ("pending", "confirmed"):
+            require_slot(db, arrival, row["UniqueID"])
+        first, last = split_name(body.name or old["name"])
+        db.execute("""UPDATE visitorsSignedUp SET FirstName=?,LastName=?,Arrival_Time=?,Status=?,UpdatedAt=?
+          WHERE UniqueID=?""", (first, last, arrival, status, now_utc(), row["UniqueID"]))
+        if active and (status != "confirmed" or arrival != row["Arrival_Time"]):
+            db.execute("UPDATE visitorsInQueue SET Status='cancelled' WHERE QueueID=?", (active["QueueID"],))
+        return appointment_view(db.execute("SELECT * FROM visitorsSignedUp WHERE UniqueID=?", (row["UniqueID"],)).fetchone())
+
+
+@router.delete("/appointments/{receipt}")
+def delete_appointment(receipt: str, user=Depends(require_admin)):
+    with db_session(write=True) as db:
+        row = db.execute("SELECT UniqueID FROM visitorsSignedUp WHERE ReceiptCode=?", (receipt,)).fetchone()
+        if row is None:
+            raise HTTPException(404, "Appointment not found.")
+        if db.execute("SELECT 1 FROM visitorsInQueue WHERE UniqueID_SignedUp=? AND Status='admitted'", (row[0],)).fetchone():
+            raise HTTPException(409, "Check this visitor out before deleting their booking.")
+        db.execute("DELETE FROM visitorsInQueue WHERE UniqueID_SignedUp=?", (row[0],))
+        db.execute("DELETE FROM visitorsSignedUp WHERE UniqueID=?", (row[0],))
     return {"message": "Appointment deleted."}

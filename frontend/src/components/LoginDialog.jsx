@@ -41,7 +41,7 @@ export default function LoginDialog({ mode, onClose, onSwitch, onSuccess }) {
         {mode === 'login' ? (
           <>
             <h2 id="auth-h">Welcome back</h2>
-            <p className="sub">Use <b>admin@tntech.edu</b> for the admin view.</p>
+            <p className="sub">Sign in with your Rockwall account. Staff access is assigned by an administrator.</p>
             {error && <p className="note err">{error}</p>}
             <div className="field"><label htmlFor="lg-email">Email <span className="req">*</span></label><input id="lg-email" className="input" type="email" autoComplete="email" value={form.email} onChange={set('email')} placeholder="name@tntech.edu" /></div>
             <div className="field"><label htmlFor="lg-pass">Password <span className="req">*</span></label><input id="lg-pass" className="input" type="password" autoComplete="current-password" value={form.password} onChange={set('password')} placeholder="••••••••" /></div>

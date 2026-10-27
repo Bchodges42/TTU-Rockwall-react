@@ -31,13 +31,13 @@ export default function AdminPage({ data, onDataChanged }) {
 
   const saveContent = e => { e.preventDefault(); run(async () => { await Promise.all(CONTENT_FIELDS.map(k => adminService.setSiteContent(k, draft[k] || ''))); return { message: 'Site content updated.' } }) }
   const saveCapacity = e => { e.preventDefault(); run(() => adminService.setCapacity(Number(adminMax)), out => `Capacity max set to ${out.max}.`) }
-  const createFaq = e => { e.preventDefault(); if (!newFaq.q || !newFaq.a) return setMsg({ type:'err', text:'Enter a question and answer.' }); run(() => adminService.addFaq(newFaq.q, newFaq.a), 'FAQ added.') && setNewFaq({ q:'', a:'' }) }
-  const createEvent = e => { e.preventDefault(); if (!newEventName.trim()) return setMsg({ type:'err', text:'Event name required.' }); run(() => adminService.addEvent({ ...EMPTY_EVENT, name: newEventName.trim() }), 'Event added.') && setNewEventName('') }
+  const createFaq = async e => { e.preventDefault(); if (!newFaq.q || !newFaq.a) return setMsg({ type:'err', text:'Enter a question and answer.' }); if (await run(() => adminService.addFaq(newFaq.q, newFaq.a), 'FAQ added.')) setNewFaq({ q:'', a:'' }) }
+  const createEvent = async e => { e.preventDefault(); if (!newEventName.trim()) return setMsg({ type:'err', text:'Event name required.' }); if (await run(() => adminService.addEvent({ ...EMPTY_EVENT, name: newEventName.trim() }), 'Event added.')) setNewEventName('') }
   const patchAppt = (id, patch) => run(() => bookingService.update(id, patch), out => `Updated ${out.name} — ${out.status || 'confirmed'}`)
 
   return (
     <>
-      <div className="page-intro"><h2>Admin portal</h2><p>Manage capacity, content, events, and reservations — admin@tntech.edu only.</p></div>
+      <div className="page-intro"><h2>Admin portal</h2><p>Manage capacity, content, events, and reservations.</p></div>
       {msg && <p className={`note ${msg.type} mt14`}>{msg.text}</p>}
 
       <section className="tile mt14">
@@ -91,7 +91,7 @@ export default function AdminPage({ data, onDataChanged }) {
               {data.appointments.map(a => (
                 <li key={a.id} className="event-row top">
                   {editing?.id === a.id ? (
-                    <form className="stack grow" onSubmit={e => { e.preventDefault(); if (patchAppt(a.id, { name: editing.name, date: editing.date, time: editing.time })) setEditing(null) }}>
+                    <form className="stack grow" onSubmit={async e => { e.preventDefault(); if (await patchAppt(a.id, { name: editing.name, date: editing.date, time: editing.time })) setEditing(null) }}>
                       <div className="row2">
                         <div className="field plain"><label>Name</label><input className="input" value={editing.name} onChange={e => setEditing(f => ({ ...f, name: e.target.value }))} /></div>
                         <div className="field plain"><label>Date</label><input className="input" type="date" value={editing.date} onChange={e => setEditing(f => ({ ...f, date: e.target.value }))} /></div>

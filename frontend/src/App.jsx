@@ -3,7 +3,8 @@ import MainPage from './components/MainPage.jsx'
 import AdminPage from './components/AdminPage.jsx'
 import LoginDialog from './components/LoginDialog.jsx'
 import BookingDialog from './components/BookingDialog.jsx'
-import { loadRockwallData } from './services/rockwallService.js'
+import StaffQueue from './components/StaffQueue.jsx'
+import { authService, loadRockwallData } from './services/rockwallService.js'
 
 const HOURS_LINK = 'https://www.tntech.edu/recreation/hours.php'
 const HERO_IMG = '/hero.jpg'
@@ -15,12 +16,13 @@ function clock() {
 
 export default function App() {
   const [role, setRole] = useState(null)
+  const [loadError, setLoadError] = useState('')
   const [view, setView] = useState(null) // null | 'login' | 'register' | 'dashboard'
   const [tab, setTab] = useState('availability')
   const [page, setPage] = useState('home') // 'home' | 'more' | 'admin'
   const [theme, setTheme] = useState(() => localStorage.getItem('ttu-theme') || 'light')
   const [data, setData] = useState({
-    capacity: { active: 4, max: 20 },
+    capacity: { active: 0, max: 20 },
     events: [], faqs: [], equipment: [], peak: [], leaderboard: [],
     routes: [], feedback: [],
     siteContent: { hero_title: '', hours_today: '', site_title: '', site_kicker: '' },
@@ -28,6 +30,11 @@ export default function App() {
   })
 
   const isAdmin = role === 'admin'
+  const isStaff = isAdmin || role === 'moderator'
+
+  useEffect(() => {
+    authService.me().then(user => setRole(user.role)).catch(() => setRole(null))
+  }, [])
 
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme); localStorage.setItem('ttu-theme', theme) }, [theme])
 
@@ -35,7 +42,8 @@ export default function App() {
     try {
       const fresh = await loadRockwallData(isAdmin)
       setData(current => ({ ...current, ...fresh }))
-    } catch { /* backend unavailable */ }
+      setLoadError('')
+    } catch (error) { setLoadError(error.message) }
   }
   useEffect(() => {
     load()
@@ -43,9 +51,13 @@ export default function App() {
     return () => clearInterval(timer)
   }, [role]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => {
-    if (role) localStorage.setItem('ttu-role', role); else localStorage.removeItem('ttu-role')
-  }, [role])
+  async function signOut() {
+    try {
+      await authService.logout()
+      setRole(null); setView(null); setTab('availability'); setPage('home')
+      setData(current => ({ ...current, appointments: [] }))
+    } catch (error) { setLoadError(error.message) }
+  }
 
   const pct = data.capacity.max ? Math.round((data.capacity.active / data.capacity.max) * 100) : 0
   const capCls = data.capacity.active >= data.capacity.max ? 'full' : pct >= 70 ? 'tight' : ''
@@ -68,11 +80,11 @@ export default function App() {
             <nav className="hero-nav" aria-label="Pages">
               <button className={page==='home' ? 'on' : ''} onClick={() => setPage('home')}>Home</button>
               <button className={page==='more' ? 'on' : ''} onClick={() => setPage('more')}>More</button>
-              {isAdmin && <button className={page==='admin' ? 'on' : ''} onClick={() => setPage('admin')}>Admin</button>}
+              {isStaff && <button className={page==='admin' ? 'on' : ''} onClick={() => setPage('admin')}>{isAdmin ? 'Admin' : 'Staff'}</button>}
             </nav>
             <button className="icon-btn" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')} aria-label="Toggle theme">{theme === 'dark' ? '☀︎' : '☾'}</button>
             {role
-              ? <button className="hero-cta" onClick={() => { setRole(null); setView(null); setTab('availability'); setPage('home') }}>Sign out</button>
+              ? <button className="hero-cta" onClick={signOut}>Sign out</button>
               : <button className="hero-cta" onClick={() => setView('login')}>Log in</button>}
           </div>
         </div>
@@ -98,13 +110,14 @@ export default function App() {
       </section>
 
       <div className="body-wrap">
+        {loadError && <p className="note err" role="alert">Live data could not be refreshed: {loadError}</p>}
         <div className="strip">
           <span><b>{clock()}</b> · {pct}% occupied · auto-refresh every 5 min · <b>{data.siteContent.hours_today || '3 PM – 8 PM'}</b></span>
           <a href={HOURS_LINK} target="_blank" rel="noreferrer">Full active hours ↗</a>
         </div>
 
-        {page === 'admin' && isAdmin
-          ? <AdminPage data={data} onDataChanged={load} />
+        {page === 'admin' && isStaff
+          ? <>{isAdmin && <AdminPage data={data} onDataChanged={load} />}<StaffQueue onDataChanged={load} /></>
           : <MainPage page={page} data={data} isAdmin={isAdmin} setPage={setPage} onBook={(t = 'schedule') => { setView('dashboard'); setTab(t) }} onDataChanged={load} />}
       </div>
 
@@ -113,11 +126,11 @@ export default function App() {
           mode={view}
           onClose={() => setView(null)}
           onSwitch={() => setView(view === 'login' ? 'register' : 'login')}
-          onSuccess={newRole => { setRole(newRole); setView(newRole === 'admin' ? null : 'dashboard'); load() }}
+          onSuccess={newRole => { setRole(newRole); setView(newRole === 'student' ? 'dashboard' : null) }}
         />
       )}
       {view === 'dashboard' && (
-        <BookingDialog tab={tab} setTab={setTab} isAdmin={isAdmin} onClose={() => setView(null)} onDataChanged={load} />
+        <BookingDialog tab={tab} setTab={setTab} onClose={() => setView(null)} onDataChanged={load} />
       )}
     </div>
   )

@@ -1,4 +1,4 @@
--- TTU Rockwall — base schema + seed (applied on first run)
+-- Legacy website layout, retained for upgrade tests/reference. New installs use 002_jonah.
 CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, firstname TEXT, lastname TEXT, phone TEXT, password TEXT);
 CREATE TABLE IF NOT EXISTS appointments (id TEXT PRIMARY KEY, name TEXT, date TEXT, time TEXT, status TEXT DEFAULT 'confirmed');
 CREATE TABLE IF NOT EXISTS feedback (id TEXT PRIMARY KEY, route TEXT, rating INTEGER, comment TEXT, author TEXT, created TEXT);

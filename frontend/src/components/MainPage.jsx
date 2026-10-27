@@ -44,7 +44,7 @@ export default function MainPage({ page, data, isAdmin, setPage, onBook, onDataC
             <div className="tile-head"><h2>Classes & events</h2><Chip cls="c-info">{events.length} today</Chip></div>
             <div className="tile-body">
               <ul className="events">
-                {events.length === 0 && <li className="event-meta">Loading…</li>}
+                {events.length === 0 && <li className="event-meta">No classes scheduled.</li>}
                 {events.map((ev, i) => (
                   <EventRow key={ev.id ?? i} ev={ev} st={eventStatus(ev)} showOpen />
                 ))}

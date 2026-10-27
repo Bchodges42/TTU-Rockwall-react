@@ -2,7 +2,7 @@
 import sys
 from fastapi import HTTPException
 
-from app.models.request_models import SiteContentIn, ensure_no_profanity
+from backend.app.models.request_models import SiteContentIn, ensure_no_profanity
 
 
 def expect_reject(text, label):
